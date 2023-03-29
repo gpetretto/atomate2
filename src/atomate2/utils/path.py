@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
 from pathlib import Path
-from typing import List, Union
 
 __all__ = ["get_uri", "strip_hostname"]
 
@@ -28,10 +28,8 @@ def get_uri(dir_name: str | Path) -> str:
     """
     fullpath = Path(dir_name).absolute()
     hostname = socket.gethostname()
-    try:
+    with contextlib.suppress(socket.gaierror, socket.herror):
         hostname = socket.gethostbyaddr(hostname)[0]
-    except (socket.gaierror, socket.herror):
-        pass
     return f"{hostname}:{fullpath}"
 
 
@@ -58,9 +56,7 @@ def strip_hostname(uri_path: str | Path) -> str:
     return dir_name
 
 
-def find_recent_logfile(
-    dir_name: Union[Path, str], logfile_extensions: Union[str, List[str]]
-):
+def find_recent_logfile(dir_name: Path | str, logfile_extensions: str | list[str]):
     """
     Find the most recent logfile in a given directory.
 

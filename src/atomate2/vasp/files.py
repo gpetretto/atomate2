@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Sequence, Union
+from typing import Sequence
 
 from pymatgen.core import Structure
 
@@ -13,7 +13,7 @@ from atomate2 import SETTINGS
 from atomate2.common.files import copy_files, get_zfile, gunzip_files, rename_files
 from atomate2.utils.file_client import FileClient, auto_fileclient
 from atomate2.utils.path import strip_hostname
-from atomate2.vasp.sets.base import VaspInputSetGenerator
+from atomate2.vasp.sets.base import VaspInputGenerator
 
 __all__ = ["copy_vasp_outputs", "get_largest_relax_extension"]
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def copy_vasp_outputs(
     src_dir: Path | str,
     src_host: str | None = None,
-    additional_vasp_files: Sequence[str] = tuple(),
+    additional_vasp_files: Sequence[str] = (),
     contcar_to_poscar: bool = True,
     file_client: FileClient | None = None,
 ):
@@ -61,7 +61,7 @@ def copy_vasp_outputs(
     directory_listing = file_client.listdir(src_dir, host=src_host)
 
     # find required files
-    files = ("INCAR", "OUTCAR", "CONTCAR", "vasprun.xml") + tuple(additional_vasp_files)
+    files = ("INCAR", "OUTCAR", "CONTCAR", "vasprun.xml", *additional_vasp_files)
     required_files = [get_zfile(directory_listing, r + relax_ext) for r in files]
 
     # find optional files; do not fail if KPOINTS is missing, this might be KSPACING
@@ -143,8 +143,8 @@ def get_largest_relax_extension(
 
 def write_vasp_input_set(
     structure: Structure,
-    input_set_generator: VaspInputSetGenerator,
-    directory: Union[str, Path] = ".",
+    input_set_generator: VaspInputGenerator,
+    directory: str | Path = ".",
     from_prev: bool = False,
     apply_incar_updates: bool = True,
     potcar_spec: bool = False,
@@ -158,7 +158,7 @@ def write_vasp_input_set(
     ----------
     structure : .Structure
         A structure.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A VASP input set generator.
     directory : str or Path
         The directory to write the input files to.
@@ -169,7 +169,7 @@ def write_vasp_input_set(
     potcar_spec : bool
         Whether to use the POTCAR.spec file instead of the POTCAR file.
     clean_prev : bool
-        Remove previous KPOINTS, INCAR, POSCAR, and POTCAR before writing the new inputs.
+        Remove previous KPOINTS, INCAR, POSCAR, and POTCAR before writing new inputs.
     **kwargs
         Keyword arguments that will be passed to :obj:`.VaspInputSet.write_input`.
     """

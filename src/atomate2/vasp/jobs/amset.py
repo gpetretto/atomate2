@@ -6,11 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from amset.deformation.generation import get_deformations
-from amset.tools.deformation import read
-from amset.tools.phonon_frequency import calculate_effective_phonon_frequency
-from amset.tools.wavefunction import wave
 from click.testing import CliRunner
+from emmet.core.math import Vector3D
 from jobflow import Flow, Response, job
 from pymatgen.core import Structure
 from pymatgen.core.tensors import symmetry_reduce
@@ -20,12 +17,11 @@ from pymatgen.transformations.standard_transformations import (
 
 from atomate2 import SETTINGS
 from atomate2.common.files import get_zfile
-from atomate2.common.schemas.math import Vector3D
 from atomate2.utils.file_client import FileClient
 from atomate2.utils.path import strip_hostname
 from atomate2.vasp.jobs.base import BaseVaspMaker
 from atomate2.vasp.jobs.core import HSEBSMaker, NonSCFMaker
-from atomate2.vasp.sets.base import VaspInputSetGenerator
+from atomate2.vasp.sets.base import VaspInputGenerator
 from atomate2.vasp.sets.core import (
     HSEBSSetGenerator,
     HSEStaticSetGenerator,
@@ -54,7 +50,7 @@ class DenseUniformMaker(NonSCFMaker):
     ----------
     name : str
         The job name.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A generator used to make the input set.
     write_input_set_kwargs : dict
         Keyword arguments that will get passed to :obj:`.write_vasp_input_set`.
@@ -63,7 +59,7 @@ class DenseUniformMaker(NonSCFMaker):
     run_vasp_kwargs : dict
         Keyword arguments that will get passed to :obj:`.run_vasp`.
     task_document_kwargs : dict
-        Keyword arguments that will get passed to :obj:`.TaskDocument.from_directory`.
+        Keyword arguments that will get passed to :obj:`.TaskDoc.from_directory`.
     stop_children_kwargs : dict
         Keyword arguments that will get passed to :obj:`.should_stop_children`.
     write_additional_data : dict
@@ -75,7 +71,7 @@ class DenseUniformMaker(NonSCFMaker):
     """
 
     name: str = "dense uniform"
-    input_set_generator: VaspInputSetGenerator = field(
+    input_set_generator: VaspInputGenerator = field(
         default_factory=lambda: NonSCFSetGenerator(
             mode="uniform", reciprocal_density=1000, user_incar_settings={"LWAVE": True}
         )
@@ -95,7 +91,7 @@ class StaticDeformationMaker(BaseVaspMaker):
     ----------
     name : str
         The job name.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A generator used to make the input set.
     write_input_set_kwargs : dict
         Keyword arguments that will get passed to :obj:`.write_vasp_input_set`.
@@ -104,7 +100,7 @@ class StaticDeformationMaker(BaseVaspMaker):
     run_vasp_kwargs : dict
         Keyword arguments that will get passed to :obj:`.run_vasp`.
     task_document_kwargs : dict
-        Keyword arguments that will get passed to :obj:`.TaskDocument.from_directory`.
+        Keyword arguments that will get passed to :obj:`.TaskDoc.from_directory`.
     stop_children_kwargs : dict
         Keyword arguments that will get passed to :obj:`.should_stop_children`.
     write_additional_data : dict
@@ -116,7 +112,7 @@ class StaticDeformationMaker(BaseVaspMaker):
     """
 
     name: str = "static deformation"
-    input_set_generator: VaspInputSetGenerator = field(
+    input_set_generator: VaspInputGenerator = field(
         default_factory=lambda: StaticSetGenerator(
             user_kpoints_settings={"reciprocal_density": 100},
             user_incar_settings={"KSPACING": None},
@@ -137,7 +133,7 @@ class HSEStaticDeformationMaker(BaseVaspMaker):
     ----------
     name : str
         The job name.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A generator used to make the input set.
     write_input_set_kwargs : dict
         Keyword arguments that will get passed to :obj:`.write_vasp_input_set`.
@@ -146,7 +142,7 @@ class HSEStaticDeformationMaker(BaseVaspMaker):
     run_vasp_kwargs : dict
         Keyword arguments that will get passed to :obj:`.run_vasp`.
     task_document_kwargs : dict
-        Keyword arguments that will get passed to :obj:`.TaskDocument.from_directory`.
+        Keyword arguments that will get passed to :obj:`.TaskDoc.from_directory`.
     stop_children_kwargs : dict
         Keyword arguments that will get passed to :obj:`.should_stop_children`.
     write_additional_data : dict
@@ -158,7 +154,7 @@ class HSEStaticDeformationMaker(BaseVaspMaker):
     """
 
     name: str = "static deformation"
-    input_set_generator: VaspInputSetGenerator = field(
+    input_set_generator: VaspInputGenerator = field(
         default_factory=lambda: HSEStaticSetGenerator(
             user_kpoints_settings={"reciprocal_density": 100},
             user_incar_settings={"KSPACING": None},
@@ -175,7 +171,7 @@ class HSEDenseUniformMaker(HSEBSMaker):
     ----------
     name : str
         The job name.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A generator used to make the input set.
     write_input_set_kwargs : dict
         Keyword arguments that will get passed to :obj:`.write_vasp_input_set`.
@@ -184,7 +180,7 @@ class HSEDenseUniformMaker(HSEBSMaker):
     run_vasp_kwargs : dict
         Keyword arguments that will get passed to :obj:`.run_vasp`.
     task_document_kwargs : dict
-        Keyword arguments that will get passed to :obj:`.TaskDocument.from_directory`.
+        Keyword arguments that will get passed to :obj:`.TaskDoc.from_directory`.
     stop_children_kwargs : dict
         Keyword arguments that will get passed to :obj:`.should_stop_children`.
     write_additional_data : dict
@@ -196,7 +192,7 @@ class HSEDenseUniformMaker(HSEBSMaker):
     """
 
     name: str = "dense uniform"
-    input_set_generator: VaspInputSetGenerator = field(
+    input_set_generator: VaspInputGenerator = field(
         default_factory=lambda: HSEBSSetGenerator(
             mode="uniform_dense",
             zero_weighted_reciprocal_density=1000,
@@ -235,6 +231,8 @@ def run_amset_deformations(
     List[str]
         The directory names of each deformation calculation.
     """
+    from amset.deformation.generation import get_deformations
+
     if static_deformation_maker is None:
         static_deformation_maker = StaticDeformationMaker()
 
@@ -297,6 +295,7 @@ def calculate_deformation_potentials(
           generated.
         - "log": The output log from ``amset deform read``.
     """
+    from amset.tools.deformation import read
     from click.testing import CliRunner
 
     # convert arguments into their command line equivalents
@@ -354,6 +353,8 @@ def calculate_polar_phonon_frequency(
         - "frequencies" (list[float]): A list of all phonon frequencies.
         - "weights" (list[float]): A list of weights for the frequencies.
     """
+    from amset.tools.phonon_frequency import calculate_effective_phonon_frequency
+
     effective_frequency, weights = calculate_effective_phonon_frequency(
         np.array(frequencies),
         np.array(eigenvectors),
@@ -389,6 +390,8 @@ def generate_wavefunction_coefficients(dir_name: str):
           file. Given as a tuple of one or two lists (one for each spin channel).
           The bands indices are zero indexed.
     """
+    from amset.tools.wavefunction import wave
+
     dir_name = strip_hostname(dir_name)  # TODO: Handle hostnames properly.
     fc = FileClient()
     files = fc.listdir(dir_name)
@@ -432,12 +435,12 @@ def _extract_ibands(log: str) -> tuple[list[int], ...]:
     for i in range(len(result_splits)):
         if "Including bands" in result_splits[i]:
             # non-spin polarised result system
-            min_band, max_band = result_splits[i].split(" ")[-1].split("—")
+            min_band, max_band = result_splits[i].split()[-1].split("—")
             return (list(range(int(min_band) - 1, int(max_band))),)
 
         if "Including:" in result_splits[i]:
-            amin_band, amax_band = result_splits[i + 1].split(" ")[-1].split("—")
-            bmin_band, bmax_band = result_splits[i + 2].split(" ")[-1].split("—")
+            amin_band, amax_band = result_splits[i + 1].split()[-1].split("—")
+            bmin_band, bmax_band = result_splits[i + 2].split()[-1].split("—")
             aibands = list(range(int(amin_band) - 1, int(amax_band)))
             bibands = list(range(int(bmin_band) - 1, int(bmax_band)))
 

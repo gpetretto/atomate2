@@ -1,15 +1,22 @@
 """Module defining core VASP input set generators."""
 
+from __future__ import annotations
+
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
+from emmet.core.math import Vector3D
 from pymatgen.core import Structure
+from pymatgen.core.periodic_table import Element
 from pymatgen.io.vasp import Outcar, Vasprun
 
-from atomate2.common.schemas.math import Vector3D
-from atomate2.vasp.sets.base import VaspInputSetGenerator
+from atomate2.vasp.sets.base import VaspInputGenerator
+
+logger = logging.getLogger(__name__)
+
 
 __all__ = [
     "RelaxSetGenerator",
@@ -21,18 +28,19 @@ __all__ = [
     "HSEBSSetGenerator",
     "HSETightRelaxSetGenerator",
     "ElectronPhononSetGenerator",
+    "MDSetGenerator",
 ]
 
 
 @dataclass
-class RelaxSetGenerator(VaspInputSetGenerator):
+class RelaxSetGenerator(VaspInputGenerator):
     """Class to generate VASP relaxation input sets."""
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -61,14 +69,14 @@ class RelaxSetGenerator(VaspInputSetGenerator):
 
 
 @dataclass
-class TightRelaxSetGenerator(VaspInputSetGenerator):
+class TightRelaxSetGenerator(VaspInputGenerator):
     """Class to generate tight VASP relaxation input sets."""
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -107,7 +115,7 @@ class TightRelaxSetGenerator(VaspInputSetGenerator):
 
 
 @dataclass
-class StaticSetGenerator(VaspInputSetGenerator):
+class StaticSetGenerator(VaspInputGenerator):
     """
     Class to generate VASP static input sets.
 
@@ -117,10 +125,10 @@ class StaticSetGenerator(VaspInputSetGenerator):
         Whether to set LEPSILON (used for calculating the high-frequency dielectric
         tensor).
     lcalcpol
-        Whether to set LCALCPOL (used tfor calculating the electronic contribution to
+        Whether to set LCALCPOL (used for calculating the electronic contribution to
         the polarization)
     **kwargs
-        Other keyword arguments that will be passed to :obj:`VaspInputSetGenerator`.
+        Other keyword arguments that will be passed to :obj:`VaspInputGenerator`.
     """
 
     lepsilon: bool = False
@@ -130,7 +138,7 @@ class StaticSetGenerator(VaspInputSetGenerator):
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -174,7 +182,7 @@ class StaticSetGenerator(VaspInputSetGenerator):
 
 
 @dataclass
-class NonSCFSetGenerator(VaspInputSetGenerator):
+class NonSCFSetGenerator(VaspInputGenerator):
     """
     Class to generate VASP non-self-consistent field input sets.
 
@@ -186,6 +194,9 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
         Energy difference used to set NEDOS, based on the total energy range.
     reciprocal_density
         Density of k-mesh by reciprocal volume.
+    reciprocal_density_metal
+        Density of k-mesh by reciprocal volume for use when the system is metallic
+        and ``auto_metal_kpoints=True`` (the default).
     line_density
         Line density for line mode band structure.
     optics
@@ -194,12 +205,13 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
         Multiplicative factor for NBANDS when starting from a previous calculation.
         Choose a higher number if you are doing an LOPTICS calculation.
     **kwargs
-        Other keyword arguments that will be passed to :obj:`VaspInputSetGenerator`.
+        Other keyword arguments that will be passed to :obj:`VaspInputGenerator`.
     """
 
     mode: str = "line"
     dedos: float = 0.02
     reciprocal_density: float = 100
+    reciprocal_density_metal: float = 400
     line_density: float = 20
     optics: bool = False
     nbands_factor: float = 1.2
@@ -251,13 +263,16 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
         elif self.mode == "boltztrap":
             return {"explicit": True, "reciprocal_density": self.reciprocal_density}
 
-        return {"reciprocal_density": self.reciprocal_density}
+        return {
+            "reciprocal_density": self.reciprocal_density,
+            "reciprocal_density_metal": self.reciprocal_density_metal,
+        }
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -282,7 +297,7 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
         dict
             A dictionary of updates to apply.
         """
-        updates: Dict[str, Any] = {
+        updates: dict[str, Any] = {
             "LCHARG": False,
             "LORBIT": 11,
             "LWAVE": False,
@@ -307,11 +322,16 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
         elif self.mode in ("line", "boltztrap"):
             # if line mode or explicit k-points (boltztrap) can't use ISMEAR=-5
             # use small sigma to avoid partial occupancies for small band gap materials
-            updates.update({"ISMEAR": 0, "SIGMA": 0.01})
+            # use a larger sigma if the material is a metal
+            sigma = 0.2 if bandgap == 0 else 0.01
+            updates.update({"ISMEAR": 0, "SIGMA": sigma})
 
         if self.optics:
-            # LREAL not supported with LOPTICS = True
-            updates.update({"LOPTICS": True, "LREAL": False, "CSHIFT": 1e-5})
+            # LREAL not supported with LOPTICS = True; automatic NEDOS usually
+            # underestimates, so set it explicitly
+            updates.update(
+                {"LOPTICS": True, "LREAL": False, "CSHIFT": 1e-5, "NEDOS": 2000}
+            )
 
         updates["MAGMOM"] = None
 
@@ -319,14 +339,21 @@ class NonSCFSetGenerator(VaspInputSetGenerator):
 
 
 @dataclass
-class HSERelaxSetGenerator(VaspInputSetGenerator):
-    """Class to generate VASP HSE06 relaxation input sets."""
+class HSERelaxSetGenerator(VaspInputGenerator):
+    """Class to generate VASP HSE06 relaxation input sets.
+
+    .. note::
+        By default the hybrid input sets use ALGO = Normal which is only efficient for
+        VASP 6.0 and higher. See https://www.vasp.at/wiki/index.php/LFOCKACE for more
+        details.
+
+    """
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -353,7 +380,7 @@ class HSERelaxSetGenerator(VaspInputSetGenerator):
         """
         return {
             "NSW": 99,
-            "ALGO": "All",
+            "ALGO": "Normal",
             "GGA": "PE",
             "HFSCREEN": 0.2,
             "LHFCALC": True,
@@ -361,18 +388,25 @@ class HSERelaxSetGenerator(VaspInputSetGenerator):
             "PRECFOCK": "Fast",
             "ISIF": 3,
             "LASPH": True,
+            "LDAU": False,
         }
 
 
 @dataclass
-class HSETightRelaxSetGenerator(VaspInputSetGenerator):
-    """Class to generate tight VASP HSE relaxation input sets."""
+class HSETightRelaxSetGenerator(VaspInputGenerator):
+    """Class to generate tight VASP HSE relaxation input sets.
+
+    .. note::
+        By default the hybrid input sets use ALGO = Normal which is only efficient for
+        VASP 6.0 and higher. See https://www.vasp.at/wiki/index.php/LFOCKACE for more
+        details.
+    """
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -405,7 +439,7 @@ class HSETightRelaxSetGenerator(VaspInputSetGenerator):
             "LAECHG": False,
             "EDIFFG": -0.001,
             "LREAL": False,
-            "ALGO": "All",
+            "ALGO": "Normal",
             "NSW": 99,
             "LCHARG": False,
             "GGA": "PE",
@@ -413,18 +447,26 @@ class HSETightRelaxSetGenerator(VaspInputSetGenerator):
             "LHFCALC": True,
             "PRECFOCK": "Fast",
             "LASPH": True,
+            "LDAU": False,
         }
 
 
 @dataclass
-class HSEStaticSetGenerator(VaspInputSetGenerator):
-    """Class to generate VASP HSE06 static input sets."""
+class HSEStaticSetGenerator(VaspInputGenerator):
+    """Class to generate VASP HSE06 static input sets.
+
+    .. note::
+        By default the hybrid input sets use ALGO = Normal which is only efficient for
+        VASP 6.0 and higher. See https://www.vasp.at/wiki/index.php/LFOCKACE for more
+        details.
+
+    """
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -451,7 +493,7 @@ class HSEStaticSetGenerator(VaspInputSetGenerator):
         """
         return {
             "NSW": 0,
-            "ALGO": "All",
+            "ALGO": "Normal",
             "GGA": "PE",
             "HFSCREEN": 0.2,
             "LHFCALC": True,
@@ -461,11 +503,12 @@ class HSEStaticSetGenerator(VaspInputSetGenerator):
             "LCHARG": True,
             "LASPH": True,
             "LREAL": False,
+            "LDAU": False,
         }
 
 
 @dataclass
-class HSEBSSetGenerator(VaspInputSetGenerator):
+class HSEBSSetGenerator(VaspInputGenerator):
     """
     Class to generate VASP HSE06 band structure input sets.
 
@@ -486,6 +529,11 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
 
     The "uniform_dense" mode employs are regular weighted k-point mesh, in addition
     to a zero-weighted uniform mesh with higher density.
+
+    .. note::
+        By default the hybrid input sets use ALGO = Normal which is only efficient for
+        VASP 6.0 and higher. See https://www.vasp.at/wiki/index.php/LFOCKACE for more
+        details.
 
     Parameters
     ----------
@@ -508,17 +556,17 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
     added_kpoints
         A list of kpoints in fractional coordinates to add as zero-weighted points.
     **kwargs
-        Other keyword arguments that will be passed to :obj:`VaspInputSetGenerator`.
+        Other keyword arguments that will be passed to :obj:`VaspInputGenerator`.
     """
 
     mode: str = "gap"
     dedos: float = 0.02
-    reciprocal_density: float = 50
+    reciprocal_density: float = 64
     line_density: float = 20
     zero_weighted_reciprocal_density: float = 100
     optics: bool = False
     nbands_factor: float = 1.2
-    added_kpoints: List[Vector3D] = field(default_factory=list)
+    added_kpoints: list[Vector3D] = field(default_factory=list)
     auto_ispin: bool = True
 
     def __post_init__(self):
@@ -561,7 +609,7 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
         dict
             A dictionary of updates to apply to the KPOINTS config.
         """
-        kpoints: Dict[str, Any] = {"reciprocal_density": self.reciprocal_density}
+        kpoints: dict[str, Any] = {"reciprocal_density": self.reciprocal_density}
 
         if self.mode == "line":
             # add line_density on top of reciprocal density
@@ -587,7 +635,7 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -614,7 +662,7 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
         """
         updates = {
             "NSW": 0,
-            "ALGO": "All",
+            "ALGO": "Normal",
             "GGA": "PE",
             "HFSCREEN": 0.2,
             "PRECFOCK": "Fast",
@@ -624,6 +672,7 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
             "KSPACING": None,
             "LORBIT": 11,
             "LREAL": False,
+            "LDAU": False,
         }
 
         if self.mode == "uniform" and len(self.added_kpoints) == 0:
@@ -653,7 +702,7 @@ class HSEBSSetGenerator(VaspInputSetGenerator):
 
 
 @dataclass
-class ElectronPhononSetGenerator(VaspInputSetGenerator):
+class ElectronPhononSetGenerator(VaspInputGenerator):
     """
     Class to generate VASP electron phonon input sets.
 
@@ -669,7 +718,7 @@ class ElectronPhononSetGenerator(VaspInputSetGenerator):
         Density of k-mesh by reciprocal volume.
     """
 
-    temperatures: Tuple[float, ...] = (
+    temperatures: tuple[float, ...] = (
         0,
         100,
         200,
@@ -682,14 +731,14 @@ class ElectronPhononSetGenerator(VaspInputSetGenerator):
         900,
         1000,
     )
-    reciprocal_density: float = 50
+    reciprocal_density: float = 64
     auto_ispin: bool = True
 
     def get_incar_updates(
         self,
         structure: Structure,
         prev_incar: dict = None,
-        bandgap: float = 0,
+        bandgap: float = None,
         vasprun: Vasprun = None,
         outcar: Outcar = None,
     ) -> dict:
@@ -768,7 +817,119 @@ class ElectronPhononSetGenerator(VaspInputSetGenerator):
         return {"reciprocal_density": self.reciprocal_density}
 
 
-def _get_nedos(vasprun: Optional[Vasprun], dedos: float):
+@dataclass
+class MDSetGenerator(VaspInputGenerator):
+    """
+    Class to generate VASP molecular dynamics input sets.
+
+    Parameters
+    ----------
+    ensemble
+        Molecular dynamics ensemble to run. Options include `nvt`, `nve`, and `npt`.
+    start_temp
+        Starting temperature. The VASP `TEBEG` parameter.
+    end_temp
+        Final temperature. The VASP `TEEND` parameter.
+    nsteps
+        Number of time steps for simulations. The VASP `NSW` parameter.
+    time_step
+        The time step (in femtosecond) for the simulation. The VASP `POTIM` parameter.
+    **kwargs
+        Other keyword arguments that will be passed to :obj:`VaspInputGenerator`.
+    """
+
+    ensemble: str = "nvt"
+    start_temp: float = 300
+    end_temp: float = 300
+    nsteps: int = 1000
+    time_step: int = 2
+    auto_ispin: bool = True
+
+    def get_incar_updates(
+        self,
+        structure: Structure,
+        prev_incar: dict = None,
+        bandgap: float = None,
+        vasprun: Vasprun = None,
+        outcar: Outcar = None,
+    ) -> dict:
+        """
+        Get updates to the INCAR for a molecular dynamics job.
+
+        Parameters
+        ----------
+        structure
+            A structure.
+        prev_incar
+            An incar from a previous calculation.
+        bandgap
+            The band gap.
+        vasprun
+            A vasprun from a previous calculation.
+        outcar
+            An outcar from a previous calculation.
+
+        Returns
+        -------
+        dict
+            A dictionary of updates to apply.
+        """
+        updates = self._get_ensemble_defaults(structure, self.ensemble)
+
+        # Based on pymatgen.io.vasp.sets.MPMDSet.
+        updates.update(
+            {
+                "ENCUT": 520,
+                "TEBEG": self.start_temp,
+                "TEEND": self.end_temp,
+                "NSW": self.nsteps,
+                "POTIM": self.time_step,
+                "LCHARG": False,
+                "NELMIN": 4,
+                "MAXMIX": 20,
+                "NELM": 500,
+                "ISYM": 0,
+                "IBRION": 0,
+                "KBLOCK": 100,
+                "PREC": "Normal",
+            }
+        )
+
+        if Element("H") in structure.species and updates["POTIM"] > 0.5:
+            logger.warning(
+                f"Molecular dynamics time step is {updates['POTIM']}, which is "
+                "typically too large for a structure containing H. Consider set it "
+                "to a value of 0.5 or smaller."
+            )
+
+        return updates
+
+    @staticmethod
+    def _get_ensemble_defaults(structure: Structure, ensemble: str) -> dict[str, Any]:
+        """Get default params for the ensemble."""
+        defaults = {
+            "nve": {"MDALGO": 1, "ISIF": 2, "ANDERSEN_PROB": 0.0},
+            "nvt": {"MDALGO": 2, "ISIF": 2, "SMASS": 0},
+            "npt": {
+                "MDALGO": 3,
+                "ISIF": 3,
+                "LANGEVIN_GAMMA": [10] * structure.ntypesp,
+                "LANGEVIN_GAMMA_L": 1,
+                "PMASS": 10,
+                "PSTRESS": 0,
+            },
+        }
+
+        try:
+            return defaults[ensemble.lower()]  # type: ignore
+        except KeyError as err:
+            supported = tuple(defaults.keys())
+            raise ValueError(
+                f"Expect `ensemble` to be one of {supported}; got {ensemble}."
+            ) from err
+
+
+def _get_nedos(vasprun: Vasprun | None, dedos: float):
     """Automatic setting of nedos using the energy range and the energy step."""
     if vasprun is None:
         return 2000

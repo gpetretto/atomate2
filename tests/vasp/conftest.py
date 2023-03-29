@@ -4,9 +4,11 @@ from typing import Literal, Sequence, Union
 
 import pytest
 
-vfiles = ("incar", "kpoints", "potcar", "poscar")
-
 logger = logging.getLogger("atomate2")
+
+_VFILES = ("incar", "kpoints", "potcar", "poscar")
+_REF_PATHS = {}
+_FAKE_RUN_VASP_KWARGS = {}
 
 
 @pytest.fixture(scope="session")
@@ -14,8 +16,9 @@ def vasp_test_dir(test_dir):
     return test_dir / "vasp"
 
 
-_REF_PATHS = {}
-_FAKE_RUN_VASP_KWARGS = {}
+@pytest.fixture(scope="session")
+def lobster_test_dir(test_dir):
+    return test_dir / "lobster"
 
 
 @pytest.fixture(scope="function")
@@ -62,24 +65,32 @@ def mock_vasp(monkeypatch, vasp_test_dir):
 
     For examples, see the tests in tests/vasp/makers/core.py.
     """
+    import atomate2.vasp.jobs.base
+    import atomate2.vasp.jobs.defect
     import atomate2.vasp.run
-    from atomate2.vasp.sets.base import VaspInputSetGenerator
+    from atomate2.vasp.sets.base import VaspInputGenerator
 
-    def mock_run_vasp():
+    def mock_run_vasp(*args, **kwargs):
         from jobflow import CURRENT_JOB
 
         name = CURRENT_JOB.job.name
         ref_path = vasp_test_dir / _REF_PATHS[name]
         fake_run_vasp(ref_path, **_FAKE_RUN_VASP_KWARGS.get(name, {}))
 
-    get_input_set_orig = VaspInputSetGenerator.get_input_set
+    get_input_set_orig = VaspInputGenerator.get_input_set
 
     def mock_get_input_set(self, *args, **kwargs):
         kwargs["potcar_spec"] = True
         return get_input_set_orig(self, *args, **kwargs)
 
+    def mock_get_nelect(*_, **__):
+        return 12
+
     monkeypatch.setattr(atomate2.vasp.run, "run_vasp", mock_run_vasp)
-    monkeypatch.setattr(VaspInputSetGenerator, "get_input_set", mock_get_input_set)
+    monkeypatch.setattr(atomate2.vasp.jobs.base, "run_vasp", mock_run_vasp)
+    monkeypatch.setattr(atomate2.vasp.jobs.defect, "run_vasp", mock_run_vasp)
+    monkeypatch.setattr(VaspInputGenerator, "get_input_set", mock_get_input_set)
+    monkeypatch.setattr(VaspInputGenerator, "get_nelect", mock_get_nelect)
 
     def _run(ref_paths, fake_run_vasp_kwargs=None):
         if fake_run_vasp_kwargs is None:
@@ -97,8 +108,8 @@ def mock_vasp(monkeypatch, vasp_test_dir):
 
 def fake_run_vasp(
     ref_path: Union[str, Path],
-    incar_settings: Sequence[str] = tuple(),
-    check_inputs: Sequence[Literal["incar", "kpoints", "poscar", "potcar"]] = vfiles,
+    incar_settings: Sequence[str] = (),
+    check_inputs: Sequence[Literal["incar", "kpoints", "poscar", "potcar"]] = _VFILES,
     clear_inputs: bool = True,
 ):
     """
@@ -113,7 +124,7 @@ def fake_run_vasp(
         A list of INCAR settings to check.
     check_inputs
         A list of vasp input files to check. Supported options are "incar", "kpoints",
-        "poscar", "potcar".
+        "poscar", "potcar", "wavecar".
     clear_inputs
         Whether to clear input files before copying in the reference VASP outputs.
     """
@@ -132,6 +143,10 @@ def fake_run_vasp(
 
     if "potcar" in check_inputs:
         check_potcar(ref_path)
+
+    # This is useful to check if the WAVECAR has been copied
+    if "wavecar" in check_inputs and not Path("WAVECAR").exists():
+        raise ValueError("WAVECAR was not correctly copied")
 
     logger.info("Verified inputs successfully")
 
@@ -186,7 +201,7 @@ def check_kpoints(ref_path: Union[str, Path]):
 
         if user.get("KSPACING", None) != ref.get("KSPACING", None):
             raise ValueError(
-                "KSPACING is not inconsistent: "
+                "KSPACING is not consistent: "
                 f"{user.get('KSPACING', None)} != {ref.get('KSPACING', None)}"
             )
 
@@ -240,6 +255,7 @@ def clear_vasp_inputs():
         "CHGCAR",
         "OUTCAR",
         "vasprun.xml",
+        "CONTCAR",
     ):
         if Path(vasp_file).exists():
             Path(vasp_file).unlink()

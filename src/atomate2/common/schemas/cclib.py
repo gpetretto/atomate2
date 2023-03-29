@@ -46,7 +46,8 @@ class TaskDocument(MoleculeMetadata):
     )
     metadata: Dict = Field(
         None,
-        description="Calculation metadata, including input parameters and runtime statistics",
+        description="Calculation metadata, including input parameters and runtime "
+        "statistics",
     )
     task_label: str = Field(None, description="A description of the task")
     tags: List[str] = Field(None, description="Optional tags for this task document")
@@ -91,19 +92,21 @@ class TaskDocument(MoleculeMetadata):
             Whether to store the molecule objects along the course of the relaxation
             trajectory.
         store_input_orientation
-            Whether to store the molecule object as specified in the input file. Note that
-            the initial molecule object is already stored, but it may be re-oriented
-            compared to the input file if the code reorients the input geometry.
+            Whether to store the molecule object as specified in the input file. Note
+            that the initial molecule object is already stored, but it may be
+            re-oriented compared to the input file if the code reorients the input
+            geometry.
         additional_fields
             Dictionary of additional fields to add to TaskDocument.
         analysis
-            The name(s) of any cclib post-processing analysis to run. Note that for bader,
-            ddec6, and hirshfeld, a cube file (.cube, .cub) must be in dir_name.
-            Supports: cpsa, mpa, lpa, bickelhaupt, density, mbo, bader, ddec6, hirshfeld.
+            The name(s) of any cclib post-processing analysis to run. Note that for
+            bader, ddec6, and hirshfeld, a cube file (.cube, .cub) must be in dir_name.
+            Supports: cpsa, mpa, lpa, bickelhaupt, density, mbo, bader, ddec6,
+            hirshfeld.
         proatom_dir
             The path to the proatom directory if ddec6 or hirshfeld analysis are
-            requested. See https://cclib.github.io/methods.html for details. If None, the
-            PROATOM_DIR environment variable must point to the proatom directory.
+            requested. See https://cclib.github.io/methods.html for details. If None,
+            the PROATOM_DIR environment variable must point to the proatom directory.
 
         Returns
         -------
@@ -113,7 +116,7 @@ class TaskDocument(MoleculeMetadata):
         from cclib.io import ccread
 
         logger.info(
-            f"Searching for the most recent log file with extensions {logfile_extensions}"
+            f"Searching for most recent log file with extensions {logfile_extensions}"
         )
 
         # Find the most recent log file with the given extension in the
@@ -146,17 +149,16 @@ class TaskDocument(MoleculeMetadata):
         attributes.pop("metadata")
         metadata = jsanitize(cclib_obj.metadata)
 
-        # monty datetime bug workaround: https://github.com/materialsvirtuallab/monty/issues/275
+        # monty datetime bug workaround: github.com/materialsvirtuallab/monty/issues/275
         if metadata.get("wall_time", None):
             metadata["wall_time"] = [str(m) for m in metadata["wall_time"]]
         if metadata.get("cpu_time", None):
             metadata["cpu_time"] = [str(m) for m in metadata["cpu_time"]]
 
         # Get the final energy to store as its own key/value pair
-        if cclib_obj.scfenergies is not None:
-            energy = cclib_obj.scfenergies[-1]
-        else:
-            energy = None
+        energy = (
+            cclib_obj.scfenergies[-1] if cclib_obj.scfenergies is not None else None
+        )
 
         # Now we construct the input molecule. Note that this is not necessarily
         # the same as the initial molecule from the relaxation because the
@@ -301,9 +303,7 @@ def cclib_calculate(
         )
     if method in ["ddec6", "hirshfeld"] and not proatom_dir:
         if "PROATOM_DIR" not in os.environ:
-            raise EnvironmentError(
-                "PROATOM_DIR environment variable not set. Returning None."
-            )
+            raise OSError("PROATOM_DIR environment variable not set. Returning None.")
         proatom_dir = os.path.expandvars(os.environ["PROATOM_DIR"])
     if proatom_dir and not os.path.exists(proatom_dir):
         raise FileNotFoundError(

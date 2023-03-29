@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from emmet.core.math import Matrix3D
 from jobflow import Flow, Response, job
 from pymatgen.alchemy.materials import TransformedStructure
 from pymatgen.analysis.elasticity import Deformation, Strain, Stress
@@ -20,9 +21,8 @@ from pymatgen.transformations.standard_transformations import (
 from atomate2 import SETTINGS
 from atomate2.common.analysis.elastic import get_default_strain_states
 from atomate2.common.schemas.elastic import ElasticDocument
-from atomate2.common.schemas.math import Matrix3D
 from atomate2.vasp.jobs.base import BaseVaspMaker
-from atomate2.vasp.sets.base import VaspInputSetGenerator
+from atomate2.vasp.sets.base import VaspInputGenerator
 from atomate2.vasp.sets.core import StaticSetGenerator
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class ElasticRelaxMaker(BaseVaspMaker):
     ----------
     name : str
         The job name.
-    input_set_generator : .VaspInputSetGenerator
+    input_set_generator : .VaspInputGenerator
         A generator used to make the input set.
     write_input_set_kwargs : dict
         Keyword arguments that will get passed to :obj:`.write_vasp_input_set`.
@@ -57,7 +57,7 @@ class ElasticRelaxMaker(BaseVaspMaker):
     run_vasp_kwargs : dict
         Keyword arguments that will get passed to :obj:`.run_vasp`.
     task_document_kwargs : dict
-        Keyword arguments that will get passed to :obj:`.TaskDocument.from_directory`.
+        Keyword arguments that will get passed to :obj:`.TaskDoc.from_directory`.
     stop_children_kwargs : dict
         Keyword arguments that will get passed to :obj:`.should_stop_children`.
     write_additional_data : dict
@@ -69,7 +69,7 @@ class ElasticRelaxMaker(BaseVaspMaker):
     """
 
     name: str = "elastic relax"
-    input_set_generator: VaspInputSetGenerator = field(
+    input_set_generator: VaspInputGenerator = field(
         default_factory=lambda: StaticSetGenerator(
             user_kpoints_settings={"grid_density": 7000},
             user_incar_settings={
@@ -141,7 +141,9 @@ def generate_elastic_deformations(
 
     strains = []
     for state, magnitudes in zip(strain_states, strain_magnitudes):
-        strains.extend([Strain.from_voigt(m * np.array(state)) for m in magnitudes])  # type: ignore
+        strains.extend(
+            [Strain.from_voigt(m * np.array(state)) for m in magnitudes]  # type: ignore
+        )
 
     # remove zero strains
     strains = [strain for strain in strains if (abs(strain) > 1e-10).any()]
@@ -251,6 +253,7 @@ def fit_elastic_tensor(
     fitting_method : str
         The method used to fit the elastic tensor. See pymatgen for more details on the
         methods themselves. The options are:
+
         - "finite_difference" (note this is required if fitting a 3rd order tensor)
         - "independent"
         - "pseudoinverse"
@@ -263,7 +266,6 @@ def fit_elastic_tensor(
     uuids = []
     job_dirs = []
     for data in deformation_data:
-
         # stress could be none if the deformation calculation failed
         if data["stress"] is None:
             continue

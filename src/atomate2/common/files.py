@@ -25,6 +25,7 @@ def copy_files(
     include_files: list[str | Path] | None = None,
     exclude_files: list[str | Path] | None = None,
     suffix: str = "",
+    prefix: str = "",
     allow_missing: bool = False,
     file_client: FileClient | None = None,
 ):
@@ -44,12 +45,14 @@ def copy_files(
         be used as the source.
     include_files : None or list of (str or .Path)
         Filenames to include as a list of str or Path objects given relative to
-        ``src_dir``. Glob file paths are supported, e.g. "\*.dat". If ``None``, all files
-        in the source directory will be copied.
+        ``src_dir``. Glob file paths are supported, e.g. "\*.dat". If ``None``, all
+        files in the source directory will be copied.
     exclude_files : None or list of (str or .Path)
         Filenames to exclude. Supports glob file matching, e.g., "\*.dat".
     suffix : str
         A suffix to add to copied files. For example ".original".
+    prefix : str
+        A prefix to add to copied files. For example "original.".
     allow_missing : bool
         Whether to error if a file in ``include_files`` is not present in the source
         directory.
@@ -66,7 +69,8 @@ def copy_files(
 
     for file in files:
         from_file = src_dir / file
-        to_file = (dest_dir / file).with_suffix(file.suffix + suffix)
+        to_file = Path(file.parent) / f"{prefix}{file.name}"
+        to_file = (dest_dir / to_file).with_suffix(file.suffix + suffix)
         try:
             file_client.copy(from_file, to_file, src_host=src_host)
         except FileNotFoundError:
@@ -115,9 +119,8 @@ def delete_files(
     )
 
     for file in files:
-        file = directory / file
         try:
-            file_client.remove(file, host=host)
+            file_client.remove(directory / file, host=host)
         except FileNotFoundError:
             if not allow_missing:
                 raise
@@ -242,8 +245,8 @@ def gunzip_files(
         inferred from the current user. If ``None``, the local filesystem will be used.
     include_files : None or list of (str or Path)
         Filenames to include as a list of str or Path objects given relative to
-        directory. Glob file paths are supported, e.g. "\*.dat". If ``None``, all gzipped
-        files in the directory will be gunzipped.
+        directory. Glob file paths are supported, e.g. "\*.dat". If ``None``, all
+        gzipped files in the directory will be gunzipped.
     exclude_files : None or list of (str or Path)
         Filenames to exclude. Supports glob file matching, e.g., "\*.dat".
     allow_missing : bool
@@ -307,7 +310,7 @@ def find_and_filter_files(
 
     if include_files is None:
         files = file_client.listdir(directory, host=host)
-        files = [f for f in files if file_client.is_file(f, host=host)]
+        files = [f for f in files if file_client.is_file(directory / f, host=host)]
     else:
         files = []
         for file in include_files:
@@ -342,7 +345,7 @@ def get_zfile(
     directory_listing : list of Path
         A list of files in a directory.
     base_name : str
-        The base name of file file to find.
+        The base name of file to find.
     allow_missing : bool
         Whether to error if no version of the file (gzipped or un-gzipped) can be found.
 
@@ -353,11 +356,7 @@ def get_zfile(
         found, then ``None`` will be returned.
     """
     for file in directory_listing:
-        if base_name == file.name:
-            return file
-        elif base_name + ".gz" == file.name:
-            return file
-        elif base_name + ".GZ" == file.name:
+        if file.name in [base_name, base_name + ".gz", base_name + ".GZ"]:
             return file
 
     if allow_missing:
