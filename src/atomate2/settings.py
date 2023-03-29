@@ -58,7 +58,7 @@ class Atomate2Settings(BaseSettings):
         description="Maximum volume change allowed in VASP relaxations before the "
         "calculation is tagged with a warning",
     )
-    VASP_HANDLE_UNSUCCESSFUL: Union[str, bool] = Field(
+    VASP_HANDLE_UNSUCCESSFUL: Union[bool, str] = Field(
         "error",
         description="Three-way toggle on what to do if the job looks OK but is actually"
         " unconverged (either electronic or ionic). - True: mark job as COMPLETED, but "
